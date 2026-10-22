@@ -1,0 +1,10 @@
+{
+  "tokens": [
+    {
+      "id": "btc-bitcoin",
+      "symbol": "BTC",
+      "name": "Bitcoin"
+    }
+  ],
+  "template": "symbol-price-change"
+}
