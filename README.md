@@ -1,6 +1,6 @@
 # Omatick
 
-Unofficial community plugin for [Omarchy](https://omarchy.org/). It is not affiliated with Basecamp or the Omarchy project.
+Unofficial community plugin for [Omarchy](https://omarchy.org/). It is not affiliated with Basecamp or the Omarchy project. Plugin id `kaduxo.omatick`. This is a crypto ticker, not the OmaTick checklist widget.
 
 Omatick adds a bottom crypto ticker strip. Omarchy has one native bar, so this plugin is a `keepLoaded` panel that occupies an exclusive zone at the bottom of the screen and follows the active Omarchy theme.
 
