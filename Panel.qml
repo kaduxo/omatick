@@ -19,11 +19,16 @@ Panel {
   property int suggestionIndex: 0
   property string searchQuery: ""
   property string searchStatus: ""
+  property string inflightQuery: ""
+  property bool searchRestart: false
+  property int draggingIndex: -1
+  property int dropIndex: -1
 
   readonly property var tokens: hostWidget && hostWidget.tokens ? hostWidget.tokens : []
   readonly property var quotes: hostWidget && hostWidget.quotes ? hostWidget.quotes : ({})
   readonly property string template: hostWidget && hostWidget.template ? hostWidget.template : "symbol-price-change"
   readonly property int replaceIndex: hostWidget && "replaceIndex" in hostWidget ? hostWidget.replaceIndex : -1
+  readonly property color upColor: hostWidget && hostWidget.upColor ? hostWidget.upColor : "#7d9a78"
 
   function open() {
     root.controller.show()
@@ -38,6 +43,8 @@ Panel {
   function close() {
     root.controller.hide()
     root.clearSearch()
+    draggingIndex = -1
+    dropIndex = -1
   }
 
   function focusSearch() {
@@ -51,6 +58,7 @@ Panel {
     suggestionIndex = 0
     searchStatus = ""
     searchDebounce.stop()
+    inflightQuery = ""
   }
 
   function toggle() {
@@ -64,16 +72,23 @@ Panel {
     if (query.length < 1) {
       suggestions = []
       searchStatus = ""
+      inflightQuery = ""
       return
     }
-    if (!searchProc.running) startSearch()
+    startSearch()
   }
 
   function startSearch() {
     var url = Model.searchUrl(searchQuery)
     if (url === "") return
+    if (searchProc.running) {
+      searchRestart = true
+      searchProc.running = false
+      return
+    }
+    inflightQuery = searchQuery
     searchStatus = "Searching…"
-    searchProc.command = ["curl", "-fsSL", "--max-time", "8", "-A", "omatick/1.0", url]
+    searchProc.command = Model.curlCommand(url)
     searchProc.running = true
   }
 
@@ -97,18 +112,43 @@ Panel {
     if (hostWidget && hostWidget.setTemplate) hostWidget.setTemplate(value)
   }
 
+  function moveToken(from, to) {
+    if (hostWidget && hostWidget.moveToken) hostWidget.moveToken(from, to)
+  }
+
+  function tokenColor(token) {
+    var change = Model.changeValue(token, root.quotes)
+    if (isFinite(change) && change < 0) return Color.urgent
+    if (isFinite(change) && change > 0) return root.upColor
+    return root.bar ? root.bar.foreground : Color.foreground
+  }
+
+  function finishDrag() {
+    if (draggingIndex >= 0 && dropIndex >= 0 && draggingIndex !== dropIndex)
+      root.moveToken(draggingIndex, dropIndex)
+    draggingIndex = -1
+    dropIndex = -1
+  }
+
   Process {
     id: searchProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (root.inflightQuery !== root.searchQuery) return
         root.suggestions = Model.parseSearch(text)
         root.suggestionIndex = 0
         root.searchStatus = root.suggestions.length === 0 ? "No coins found" : ""
       }
     }
     onExited: function(code) {
-      if (code !== 0) root.searchStatus = "Search failed"
+      if (root.searchRestart) {
+        root.searchRestart = false
+        root.startSearch()
+        return
+      }
+      if (code !== 0 && root.inflightQuery === root.searchQuery)
+        root.searchStatus = "Search failed"
     }
   }
 
@@ -159,7 +199,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "Omatick"
+          text: "Omatick Crypto"
           color: root.bar ? root.bar.foreground : Color.foreground
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.heading
@@ -169,8 +209,8 @@ Panel {
           width: parent.width
           wrapMode: Text.WordWrap
           text: tokens.length >= Model.MAX_TOKENS
-            ? "Ten coins on the bar. Click one below, then pick a search result to replace it."
-            : "Search a coin to add it. Up to ten on the bottom bar."
+            ? "Ten coins on the strip. Drag the handle to reorder, or click a coin and pick a search result to replace it."
+            : "Search a coin to add it. Drag the handle to reorder. Up to ten on the bottom strip."
           color: Color.muted
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
@@ -180,37 +220,61 @@ Panel {
           model: tokens
 
           Rectangle {
+            id: tokenRow
             required property var modelData
             required property int index
             width: body.width
             height: Style.space(36)
             radius: Style.cornerRadius
-            color: root.replaceIndex === index ? Color.menu.selectedBackground : "transparent"
+            color: {
+              if (root.dropIndex === index && root.draggingIndex >= 0) return Color.menu.selectedBackground
+              if (root.replaceIndex === index) return Color.menu.selectedBackground
+              return "transparent"
+            }
             border.width: 1
             border.color: root.replaceIndex === index ? Color.accent : Color.popups.border
 
             MouseArea {
               anchors.fill: parent
+              hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: root.setReplaceIndex(index)
+              onEntered: {
+                if (root.draggingIndex >= 0) root.dropIndex = index
+              }
             }
 
             Row {
               anchors.fill: parent
-              anchors.leftMargin: Style.space(10)
+              anchors.leftMargin: Style.space(8)
               anchors.rightMargin: Style.space(8)
-              spacing: Style.space(10)
+              spacing: Style.space(8)
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
-                width: parent.width - Style.space(70)
+                width: Style.space(16)
+                text: "⠿"
+                color: Color.muted
+                font.pixelSize: Style.font.body
+                MouseArea {
+                  anchors.fill: parent
+                  anchors.margins: -6
+                  cursorShape: Qt.SizeAllCursor
+                  onPressed: {
+                    root.draggingIndex = index
+                    root.dropIndex = index
+                  }
+                  onReleased: root.finishDrag()
+                  onCanceled: root.finishDrag()
+                }
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - Style.space(90)
                 elide: Text.ElideRight
                 text: Model.formatToken(modelData, root.quotes, root.template)
-                color: {
-                  var change = Model.changeValue(modelData, root.quotes)
-                  if (isFinite(change) && change < 0) return Color.urgent
-                  return root.bar ? root.bar.foreground : Color.foreground
-                }
+                color: root.tokenColor(modelData)
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.body
               }

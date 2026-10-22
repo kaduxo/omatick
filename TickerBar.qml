@@ -24,7 +24,13 @@ Item {
   property var clickTargets: []
   property real lastLeftClickAt: 0
   property bool writingSettings: false
+  property bool settingsReady: false
   property bool localTransparent: true
+  property bool userToggledTransparent: false
+  property int refreshInterval: Model.REFRESH_MS
+  property var paprikaQueue: []
+  property real lastPaprikaAt: 0
+  property color upColor: "#7d9a78"
 
   Item {
     id: defaultAnchor
@@ -41,16 +47,38 @@ Item {
   readonly property bool barTransparent: shell && shell.barConfig ? !!shell.barConfig.transparent : true
   readonly property int stripSize: Style.bar.sizeHorizontal
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+  readonly property bool paused: idleMonitor.isIdle
 
-  onBarTransparentChanged: localTransparent = barTransparent
-  Component.onCompleted: localTransparent = barTransparent
+  onBarTransparentChanged: {
+    if (!userToggledTransparent) localTransparent = barTransparent
+  }
+  Component.onCompleted: {
+    localTransparent = barTransparent
+    layerRuleProc.running = true
+  }
+  onPausedChanged: {
+    if (!paused && settingsReady) refresh()
+  }
+
+  function open(arg) {
+    openFrom(root.panelAnchor, -1)
+  }
+
+  function close() {
+    closePanel()
+  }
+
+  function toggle() {
+    if (root.opened) closePanel()
+    else openFrom(root.panelAnchor, -1)
+  }
 
   QtObject {
     id: barFacade
     property color foreground: Commons.Color.bar.text
     property color barForeground: Commons.Color.bar.text
     property color background: Commons.Color.bar.background
-    property color urgent: Commons.Color.bar.active
+    property color urgent: Commons.Color.urgent
     property string fontFamily: Style.font.family
     property string position: "bottom"
     property bool vertical: false
@@ -97,8 +125,6 @@ Item {
     var payload = { tokens: storedTokens, template: storedTemplate }
     writingSettings = true
     settingsFile.setText(JSON.stringify(payload, null, 2) + "\n")
-    if (root.shell && typeof root.shell.updateEntryInline === "function")
-      root.shell.updateEntryInline(root.pluginId, { id: root.pluginId, tokens: storedTokens, template: storedTemplate })
   }
 
   function setTokens(next) {
@@ -116,6 +142,10 @@ Item {
     root.replaceIndex = -1
   }
 
+  function moveToken(from, to) {
+    setTokens(Model.moveToken(root.tokens, from, to))
+  }
+
   function cycleTemplate() {
     persist({ template: Model.nextTemplate(root.template) })
   }
@@ -124,14 +154,45 @@ Item {
     persist({ template: Model.normalizeTemplate(value) })
   }
 
+  function tokenColor(token) {
+    var change = Model.changeValue(token, root.quotes)
+    if (isFinite(change) && change < 0) return Commons.Color.urgent
+    if (isFinite(change) && change > 0) return root.upColor
+    return Commons.Color.bar.text
+  }
+
   function refresh() {
-    var command = Model.priceCommand(root.tokens)
-    if (command.length === 0) return
+    if (root.paused || !root.settingsReady) return
+    var url = Model.binanceUrl(root.tokens)
+    if (url === "") return
     if (priceProc.running) return
     root.refreshing = true
     root.statusText = "Refreshing…"
-    priceProc.command = command
+    priceProc.command = Model.curlCommand(url)
     priceProc.running = true
+  }
+
+  function queuePaprikaFallbacks(quotes) {
+    var missing = Model.missingQuoteIds(root.tokens, quotes)
+    root.paprikaQueue = missing
+    drainPaprika()
+  }
+
+  function drainPaprika() {
+    if (paprikaProc.running) return
+    if (!root.paprikaQueue || root.paprikaQueue.length === 0) return
+    var now = Date.now()
+    if (root.lastPaprikaAt && now - root.lastPaprikaAt < Model.PAPRIKA_GAP_MS) return
+    var id = root.paprikaQueue[0]
+    var url = Model.paprikaTickerUrl(id)
+    if (url === "") {
+      root.paprikaQueue = root.paprikaQueue.slice(1)
+      drainPaprika()
+      return
+    }
+    root.lastPaprikaAt = now
+    paprikaProc.command = Model.curlCommand(url)
+    paprikaProc.running = true
   }
 
   function closePanel() {
@@ -158,25 +219,30 @@ Item {
     openFrom(anchor, index)
   }
 
-  function handleLeftClick(anchor, index) {
+  function handleEmptyClick(anchor) {
     var now = Date.now()
     if (now - root.lastLeftClickAt < 280) {
       root.lastLeftClickAt = 0
       pendingClick.stop()
-      toggleTransparency()
+      toggleStripTransparency()
       return
     }
     root.lastLeftClickAt = now
     pendingClick.anchor = anchor
-    pendingClick.index = index
     pendingClick.restart()
   }
 
-  function toggleTransparency() {
+  function toggleStripTransparency() {
     closePanel()
-    var next = !root.localTransparent
-    root.localTransparent = next
-    Util.execArgv(["omarchy", "bar", "transparent", next ? "true" : "false"])
+    userToggledTransparent = true
+    localTransparent = !localTransparent
+  }
+
+  IdleMonitor {
+    id: idleMonitor
+    timeout: 60
+    enabled: true
+    respectInhibitors: true
   }
 
   FileView {
@@ -190,12 +256,19 @@ Item {
         return
       }
       var parsed = Model.parseSettings(text())
-      root.storedTokens = parsed.tokens
+      if (!parsed) {
+        root.settingsReady = true
+        return
+      }
+      if (parsed.tokens.length > 0) root.storedTokens = parsed.tokens
+      else root.storedTokens = []
       root.storedTemplate = parsed.template
+      root.settingsReady = true
+      Qt.callLater(root.refresh)
     }
     onLoadFailed: {
-      root.storedTokens = Model.defaultTokens()
-      root.storedTemplate = "symbol-price-change"
+      root.settingsReady = true
+      Qt.callLater(root.refresh)
     }
   }
 
@@ -204,22 +277,60 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parsePrices(text)
+        var parsed = Model.parseBinance(text, root.tokens)
+        if (!parsed) return
+        var merged = Model.mergeQuotes(root.quotes, parsed)
+        var next = {}
+        var list = root.tokens
+        for (var i = 0; i < list.length; i++) {
+          if (merged[list[i].id]) next[list[i].id] = merged[list[i].id]
+        }
+        root.quotes = next
+        root.statusText = ""
+        root.refreshInterval = Model.REFRESH_MS
+        root.queuePaprikaFallbacks(next)
+      }
+    }
+    onExited: function(code) {
+      root.refreshing = false
+      if (code !== 0) {
+        root.statusText = "Price fetch failed"
+        root.refreshInterval = Model.nextBackoff(root.refreshInterval)
+      }
+    }
+  }
+
+  Process {
+    id: paprikaProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.parsePaprikaTicker(text)
         if (parsed) {
-          root.quotes = parsed
+          root.quotes = Model.mergeQuotes(root.quotes, parsed)
           root.statusText = ""
         }
       }
     }
     onExited: function(code) {
-      root.refreshing = false
-      if (code !== 0) root.statusText = "Price fetch failed"
+      root.paprikaQueue = root.paprikaQueue.slice(1)
+      if (code !== 0) root.lastPaprikaAt = Date.now()
+      Qt.callLater(root.drainPaprika)
     }
   }
 
+  Process {
+    id: layerRuleProc
+    command: [
+      "hyprctl",
+      "eval",
+      "hl.layer_rule({ match = { namespace = \"kaduxo-omatick\" }, no_anim = true, animation = \"none\" })"
+    ]
+  }
+
   Timer {
-    interval: 60000
-    running: true
+    interval: root.refreshInterval
+    running: root.settingsReady && !root.paused
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
@@ -230,8 +341,7 @@ Item {
     interval: 280
     repeat: false
     property var anchor: null
-    property int index: -1
-    onTriggered: root.activateFrom(anchor, index)
+    onTriggered: root.activateFrom(anchor, -1)
   }
 
   Loader {
@@ -256,7 +366,7 @@ Item {
         screen: modelData
         visible: !remapGuard.remapping
         exclusionMode: ExclusionMode.Auto
-        implicitHeight: Math.max(root.stripSize, tickerFlow.implicitHeight)
+        implicitHeight: root.stripSize
         color: root.localTransparent ? "transparent" : Commons.Color.bar.background
         surfaceFormat.opaque: false
         WlrLayershell.namespace: "kaduxo-omatick"
@@ -273,57 +383,56 @@ Item {
           window: strip
         }
 
-        Component.onCompleted: {
-          if (!root.panelAnchor || root.panelAnchor === defaultAnchor)
-            root.panelAnchor = tickerFlow
-          root.injectPanel()
-        }
-
         MouseArea {
           anchors.fill: parent
           acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
           onClicked: function(mouse) {
             if (mouse.button === Qt.RightButton) root.cycleTemplate()
             else if (mouse.button === Qt.MiddleButton) root.refresh()
-            else root.handleLeftClick(tickerFlow, -1)
+            else root.handleEmptyClick(tickerRow)
           }
         }
 
-        Flow {
-          id: tickerFlow
-          anchors.horizontalCenter: parent.horizontalCenter
-          anchors.verticalCenter: parent.verticalCenter
-          width: parent.width
-          spacing: Style.space(2)
+        Flickable {
+          id: tickerFlick
+          anchors.fill: parent
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.HorizontalFlick
+          contentHeight: height
+          contentWidth: Math.max(width, tickerRow.implicitWidth)
+          interactive: tickerRow.implicitWidth > width
 
-          Repeater {
-            model: root.tokens.length > 0 ? root.tokens : [{ id: "", symbol: "₿", name: "Add tickers" }]
+          Row {
+            id: tickerRow
+            height: tickerFlick.height
+            spacing: Style.space(2)
+            x: tickerRow.implicitWidth >= tickerFlick.width ? 0 : Math.round((tickerFlick.width - tickerRow.implicitWidth) / 2)
 
-            WidgetButton {
-              required property var modelData
-              required property int index
-              bar: barFacade
-              text: modelData.id
-                ? Model.formatToken(modelData, root.quotes, root.template)
-                : (root.statusText !== "" ? root.statusText : "Add tickers")
-              tooltipText: root.statusText !== "" ? root.statusText : text
-              labelVisible: true
-              hasVisualContent: text !== ""
-              horizontalMargin: 8.75
-              verticalPadding: 8.75
-              fontSize: Style.font.caption
-              useActiveColor: false
-              foreground: {
-                if (!modelData.id) return Commons.Color.muted
-                var change = Model.changeValue(modelData, root.quotes)
-                if (isFinite(change) && change < 0) return Commons.Color.urgent
-                return Commons.Color.bar.text
-              }
+            Repeater {
+              model: root.tokens.length > 0 ? root.tokens : [{ id: "", symbol: "₿", name: "Add tickers" }]
 
-              onPressed: function(b) {
-                if (b === Qt.RightButton) root.cycleTemplate()
-                else if (b === Qt.MiddleButton) root.refresh()
-                else root.handleLeftClick(this, modelData.id ? index : -1)
+              WidgetButton {
+                required property var modelData
+                required property int index
+                bar: barFacade
+                text: modelData.id
+                  ? Model.formatToken(modelData, root.quotes, root.template)
+                  : (root.statusText !== "" ? root.statusText : "Add tickers")
+                tooltipText: root.statusText !== "" ? root.statusText : text
+                labelVisible: true
+                hasVisualContent: text !== ""
+                horizontalMargin: Style.space(9)
+                verticalPadding: Style.space(9)
+                fontSize: Style.font.caption
+                useActiveColor: false
+                foreground: modelData.id ? root.tokenColor(modelData) : Commons.Color.muted
+
+                onPressed: function(b) {
+                  if (b === Qt.RightButton) root.cycleTemplate()
+                  else if (b === Qt.MiddleButton) root.refresh()
+                  else root.activateFrom(this, modelData.id ? index : -1)
+                }
               }
             }
           }

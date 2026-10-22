@@ -1,12 +1,13 @@
 {
   "schemaVersion": 1,
   "id": "kaduxo.omatick",
-  "name": "Omatick",
-  "version": "1.0.0",
+  "name": "Omatick Crypto",
+  "version": "1.1.0",
   "author": "kaduxo",
   "license": "MIT",
   "homepage": "https://github.com/kaduxo/omatick",
-  "description": "Unofficial Omarchy bottom-bar crypto ticker. Up to ten coins, CoinPaprika plus Binance fallback, no API key.",
+  "description": "Unofficial Omarchy bottom crypto ticker. Binance prices, CoinPaprika search, up to ten coins.",
+  "preview": "preview.png",
   "kinds": [
     "panel"
   ],

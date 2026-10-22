@@ -4,6 +4,9 @@ var PLUGIN_ID = "kaduxo.omatick"
 var USER_AGENT = "omatick/1.0"
 var LAYER_NAMESPACE = "kaduxo-omatick"
 var MAX_TOKENS = 10
+var REFRESH_MS = 60000
+var REFRESH_MAX_MS = 900000
+var PAPRIKA_GAP_MS = 300000
 
 var TEMPLATES = [
   { value: "symbol-price-change", label: "BTC $97k +1.2%" },
@@ -19,20 +22,21 @@ function defaultTokens() {
   ]
 }
 
-function paprikaIdFromGecko(id, symbol) {
-  var slug = String(id || "").trim()
-  var ticker = String(symbol || "").trim().toLowerCase()
-  if (!slug) return ""
-  if (slug.indexOf("-") >= 0) return slug
-  return ticker ? ticker + "-" + slug : slug
+function isSafeId(value) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(value || ""))
+}
+
+function isSafeSymbol(value) {
+  return /^[A-Z0-9]{1,12}$/.test(String(value || ""))
 }
 
 function normalizeToken(raw) {
   if (!raw || typeof raw !== "object") return null
-  var id = paprikaIdFromGecko(raw.id, raw.symbol)
+  var id = String(raw.id || "").trim().toLowerCase()
   var symbol = String(raw.symbol || "").trim().toUpperCase()
   var name = String(raw.name || symbol || id).trim()
-  if (!id || !symbol) return null
+  if (!isSafeId(id) || !isSafeSymbol(symbol)) return null
+  if (!name) return null
   return { id: id, symbol: symbol, name: name }
 }
 
@@ -138,7 +142,7 @@ function changeValue(token, quotes) {
 function parseSearch(raw) {
   try {
     var parsed = JSON.parse(String(raw || ""))
-    var coins = parsed && parsed.coins ? parsed.coins : (parsed && parsed.currencies ? parsed.currencies : [])
+    var coins = parsed && Array.isArray(parsed.currencies) ? parsed.currencies : []
     var out = []
     var seen = {}
     for (var i = 0; i < coins.length && out.length < 12; i++) {
@@ -153,36 +157,77 @@ function parseSearch(raw) {
   }
 }
 
-function parsePrices(raw) {
+function parseBinance(raw, tokens) {
   try {
     var parsed = JSON.parse(String(raw || ""))
-    if (!parsed || typeof parsed !== "object") return {}
-    if (parsed.error) return null
-    if (parsed.quotes && parsed.quotes.USD) {
-      var mapped = {}
-      mapped[parsed.id || ""] = {
-        usd: parsed.quotes.USD.price,
-        usd_24h_change: parsed.quotes.USD.percent_change_24h
-      }
-      return mapped
+    var rows = Array.isArray(parsed) ? parsed : (parsed && parsed.symbol ? [parsed] : [])
+    var byPair = {}
+    for (var i = 0; i < rows.length; i++) {
+      var pair = String(rows[i].symbol || "")
+      var price = Number(rows[i].lastPrice)
+      var change = Number(rows[i].priceChangePercent)
+      if (!pair || !isFinite(price)) continue
+      byPair[pair] = { usd: price, usd_24h_change: change }
     }
-    return parsed
+    var list = normalizeTokens(tokens)
+    var out = {}
+    for (var j = 0; j < list.length; j++) {
+      var quote = byPair[list[j].symbol + "USDT"]
+      if (quote) out[list[j].id] = quote
+    }
+    return out
   } catch (e) {
     return null
   }
 }
 
+function parsePaprikaTicker(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    if (!parsed || typeof parsed !== "object" || parsed.error) return null
+    if (!isSafeId(parsed.id) || !parsed.quotes || !parsed.quotes.USD) return null
+    var price = Number(parsed.quotes.USD.price)
+    var change = Number(parsed.quotes.USD.percent_change_24h)
+    if (!isFinite(price)) return null
+    var mapped = {}
+    mapped[parsed.id] = { usd: price, usd_24h_change: change }
+    return mapped
+  } catch (e) {
+    return null
+  }
+}
+
+function mergeQuotes(base, extra) {
+  var out = {}
+  var key
+  if (base && typeof base === "object") {
+    for (key in base) out[key] = base[key]
+  }
+  if (extra && typeof extra === "object") {
+    for (key in extra) out[key] = extra[key]
+  }
+  return out
+}
+
+function missingQuoteIds(tokens, quotes) {
+  var list = normalizeTokens(tokens)
+  var missing = []
+  for (var i = 0; i < list.length; i++) {
+    if (!quoteFor(quotes, list[i].id)) missing.push(list[i].id)
+  }
+  return missing
+}
+
 function parseSettings(raw) {
   try {
     var parsed = JSON.parse(String(raw || ""))
-    if (!parsed || typeof parsed !== "object") return { tokens: defaultTokens(), template: "symbol-price-change" }
-    var tokens = normalizeTokens(parsed.tokens)
+    if (!parsed || typeof parsed !== "object") return null
     return {
-      tokens: tokens.length > 0 ? tokens : defaultTokens(),
+      tokens: normalizeTokens(parsed.tokens),
       template: normalizeTemplate(parsed.template)
     }
   } catch (e) {
-    return { tokens: defaultTokens(), template: "symbol-price-change" }
+    return null
   }
 }
 
@@ -190,6 +235,30 @@ function searchUrl(query) {
   var q = String(query || "").trim()
   if (q.length < 1) return ""
   return "https://api.coinpaprika.com/v1/search/?q=" + encodeURIComponent(q) + "&c=currencies&limit=12"
+}
+
+function binanceUrl(tokens) {
+  var list = normalizeTokens(tokens)
+  var pairs = []
+  var seen = {}
+  for (var i = 0; i < list.length; i++) {
+    var pair = list[i].symbol + "USDT"
+    if (seen[pair]) continue
+    seen[pair] = true
+    pairs.push(pair)
+  }
+  if (pairs.length === 0) return ""
+  return "https://api.binance.com/api/v3/ticker/24hr?symbols=" + encodeURIComponent(JSON.stringify(pairs))
+}
+
+function paprikaTickerUrl(id) {
+  if (!isSafeId(id)) return ""
+  return "https://api.coinpaprika.com/v1/tickers/" + id
+}
+
+function curlCommand(url) {
+  if (!url) return []
+  return ["curl", "-fsSL", "--max-time", "8", "-A", USER_AGENT, url]
 }
 
 function applySelection(tokens, incoming, replaceIndex) {
@@ -221,26 +290,22 @@ function removeAt(tokens, index) {
   return list
 }
 
-function priceCommand(tokens) {
+function moveToken(tokens, from, to) {
   var list = normalizeTokens(tokens)
-  if (list.length === 0) return []
-  var ua = USER_AGENT
-  var args = [
-    "bash",
-    "-c",
-    "files=(); trap 'rm -f \"${files[@]}\"' EXIT; " +
-      "for spec in \"$@\"; do " +
-      "id=\"${spec%%|*}\"; symbol=\"${spec#*|}\"; f=$(mktemp); files+=(\"$f\"); " +
-      "( " +
-      "if curl -fsSL --max-time 8 -A '" + ua + "' \"https://api.coinpaprika.com/v1/tickers/${id}\" > \"$f\"; then :; " +
-      "elif [ -n \"$symbol\" ] && [ \"$symbol\" != \"$id\" ]; then " +
-      "curl -fsSL --max-time 8 -A '" + ua + "' \"https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT\" " +
-      "| jq --arg id \"$id\" '{id:$id, quotes:{USD:{price:(.lastPrice|tonumber), percent_change_24h:(.priceChangePercent|tonumber)}}}' > \"$f\" || echo '{}' > \"$f\"; " +
-      "else echo '{}' > \"$f\"; fi; " +
-      ") & done; wait; " +
-      "jq -s 'map(select(.quotes.USD != null) | {(.id): {usd: .quotes.USD.price, usd_24h_change: .quotes.USD.percent_change_24h}}) | add // {}' \"${files[@]}\"",
-    "omatick"
-  ]
-  for (var i = 0; i < list.length; i++) args.push(list[i].id + "|" + list[i].symbol)
-  return args
+  var src = Number(from)
+  var dst = Number(to)
+  if (isNaN(src) || src < 0 || src >= list.length) return list
+  if (isNaN(dst)) return list
+  if (dst < 0) dst = 0
+  if (dst >= list.length) dst = list.length - 1
+  if (src === dst) return list
+  var item = list.splice(src, 1)[0]
+  list.splice(dst, 0, item)
+  return list
+}
+
+function nextBackoff(current) {
+  var value = Number(current)
+  if (!isFinite(value) || value < REFRESH_MS) value = REFRESH_MS
+  return Math.min(value * 2, REFRESH_MAX_MS)
 }
