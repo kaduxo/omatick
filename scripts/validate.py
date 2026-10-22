@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for the Omatick plugin repo. No host Omarchy install required."""
+"""Static checks for the CryptoTickBar plugin repo. No host Omarchy install required."""
 
 from __future__ import annotations
 
@@ -58,8 +58,10 @@ def main() -> None:
     manifest = json.loads(read("manifest.json"))
     if manifest.get("schemaVersion") != 1:
         fail("schemaVersion must be 1")
-    if manifest.get("id") != "kaduxo.omatick":
-        fail("id must be kaduxo.omatick")
+    if manifest.get("id") != "kaduxo.cryptotickbar":
+        fail("id must be kaduxo.cryptotickbar")
+    if manifest.get("name") != "CryptoTickBar":
+        fail("name must be CryptoTickBar")
     if str(manifest.get("id", "")).startswith("omarchy."):
         fail("id must not use the reserved omarchy. prefix")
     if manifest.get("kinds") != ["panel"]:

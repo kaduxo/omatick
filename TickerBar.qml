@@ -330,7 +330,7 @@ Item {
     command: [
       "hyprctl",
       "eval",
-      "hl.layer_rule({ match = { namespace = \"kaduxo-omatick\" }, no_anim = true, animation = \"none\" })"
+      "hl.layer_rule({ match = { namespace = \"" + Model.LAYER_NAMESPACE + "\" }, no_anim = true, animation = \"none\" })"
     ]
   }
 
@@ -386,7 +386,7 @@ Item {
         implicitHeight: root.stripSize
         color: root.localTransparent ? "transparent" : Commons.Color.bar.background
         surfaceFormat.opaque: false
-        WlrLayershell.namespace: "kaduxo-omatick"
+        WlrLayershell.namespace: Model.LAYER_NAMESPACE
         WlrLayershell.layer: WlrLayer.Top
 
         anchors {

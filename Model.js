@@ -1,8 +1,8 @@
 .pragma library
 
-var PLUGIN_ID = "kaduxo.omatick"
-var USER_AGENT = "omatick/1.2"
-var LAYER_NAMESPACE = "kaduxo-omatick"
+var PLUGIN_ID = "kaduxo.cryptotickbar"
+var USER_AGENT = "cryptotickbar/1.3"
+var LAYER_NAMESPACE = "kaduxo-cryptotickbar"
 var MAX_TOKENS = 10
 var REFRESH_MS = 60000
 var REFRESH_MAX_MS = 900000

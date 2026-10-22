@@ -7,8 +7,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "kaduxo.omatick"
-  ipcTarget: "kaduxo.omatick"
+  moduleName: "kaduxo.cryptotickbar"
+  ipcTarget: "kaduxo.cryptotickbar"
   manageIpc: false
 
   property var anchorItem: null
@@ -328,7 +328,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "Omatick Crypto"
+          text: "CryptoTickBar"
           color: root.bar ? root.bar.foreground : Color.foreground
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.heading
