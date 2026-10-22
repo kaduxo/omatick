@@ -1,7 +1,7 @@
 {
   "tokens": [
     {
-      "id": "btc-bitcoin",
+      "id": "bitcoin",
       "symbol": "BTC",
       "name": "Bitcoin"
     }

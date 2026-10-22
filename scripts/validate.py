@@ -67,7 +67,7 @@ def main() -> None:
 
     example = json.loads(read("settings.example.json"))
     tokens = example.get("tokens") or []
-    if len(tokens) != 1 or tokens[0].get("id") != "btc-bitcoin":
+    if len(tokens) != 1 or tokens[0].get("id") != "bitcoin":
         fail("settings.example.json must only contain Bitcoin")
 
     blob = "\n".join(read(name) for name in SCAN_GLOBS).lower()

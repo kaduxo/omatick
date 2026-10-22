@@ -4,7 +4,7 @@ Unofficial community plugin for [Omarchy](https://omarchy.org/). It is not affil
 
 Omatick adds a bottom crypto ticker strip. Omarchy has one native bar, so this plugin is a `keepLoaded` panel that occupies an exclusive zone at the bottom of each screen and follows the active Omarchy theme.
 
-Prices come from Binance USDT 24hr tickers in one request. CoinPaprika is used for coin search and as a rare fallback for symbols Binance does not list. No credentials are required.
+Prices come from CoinGecko `simple/price` in one request. If CoinGecko is unavailable, Binance USDT 24hr is the fallback. CoinPaprika fills coins those two do not list. Search uses CoinGecko. No credentials are required.
 
 ## Requirements
 
@@ -79,7 +79,7 @@ rm -f ~/.config/omarchy/kaduxo.omatick.json
 
 ## Security
 
-This is a third-party plugin. It runs unsandboxed inside `omarchy-shell` with your user account. Read the code before you enable it. Outbound HTTPS goes only to `api.binance.com` and `api.coinpaprika.com`. Coin ids are allowlisted before they are used in URLs. There is no install hook. The only extra write is `~/.config/omarchy/kaduxo.omatick.json`.
+This is a third-party plugin. It runs unsandboxed inside `omarchy-shell` with your user account. Read the code before you enable it. Outbound HTTPS goes only to `api.coingecko.com`, `api.binance.com`, and `api.coinpaprika.com`. Coin ids are allowlisted before they are used in URLs. There is no install hook. The only extra write is `~/.config/omarchy/kaduxo.omatick.json`.
 
 ## License
 

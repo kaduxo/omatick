@@ -30,6 +30,7 @@ Item {
   property int refreshInterval: Model.REFRESH_MS
   property var paprikaQueue: []
   property real lastPaprikaAt: 0
+  property string priceSource: "gecko"
   property color upColor: "#7d9a78"
 
   Item {
@@ -47,7 +48,6 @@ Item {
   readonly property bool barTransparent: shell && shell.barConfig ? !!shell.barConfig.transparent : true
   readonly property int stripSize: Style.bar.sizeHorizontal
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
-  readonly property bool paused: idleMonitor.isIdle
 
   onBarTransparentChanged: {
     if (!userToggledTransparent) localTransparent = barTransparent
@@ -55,9 +55,6 @@ Item {
   Component.onCompleted: {
     localTransparent = barTransparent
     layerRuleProc.running = true
-  }
-  onPausedChanged: {
-    if (!paused && settingsReady) refresh()
   }
 
   function open(arg) {
@@ -162,14 +159,26 @@ Item {
   }
 
   function refresh() {
-    if (root.paused || !root.settingsReady) return
-    var url = Model.binanceUrl(root.tokens)
-    if (url === "") return
+    if (!root.settingsReady) return
     if (priceProc.running) return
+    var url = Model.geckoPriceUrl(root.tokens)
+    if (url === "") return
+    root.priceSource = "gecko"
     root.refreshing = true
     root.statusText = "Refreshing…"
     priceProc.command = Model.curlCommand(url)
     priceProc.running = true
+  }
+
+  function refreshBinance() {
+    var url = Model.binanceUrl(root.tokens)
+    if (url === "") return false
+    root.priceSource = "binance"
+    root.refreshing = true
+    root.statusText = "Refreshing…"
+    priceProc.command = Model.curlCommand(url)
+    priceProc.running = true
+    return true
   }
 
   function queuePaprikaFallbacks(quotes) {
@@ -238,13 +247,6 @@ Item {
     localTransparent = !localTransparent
   }
 
-  IdleMonitor {
-    id: idleMonitor
-    timeout: 60
-    enabled: true
-    respectInhibitors: true
-  }
-
   FileView {
     id: settingsFile
     path: root.settingsPath
@@ -277,7 +279,9 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = Model.parseBinance(text, root.tokens)
+        var parsed = root.priceSource === "binance"
+          ? Model.parseBinance(text, root.tokens)
+          : Model.parseGeckoPrices(text, root.tokens)
         if (!parsed) return
         var merged = Model.mergeQuotes(root.quotes, parsed)
         var next = {}
@@ -293,10 +297,10 @@ Item {
     }
     onExited: function(code) {
       root.refreshing = false
-      if (code !== 0) {
-        root.statusText = "Price fetch failed"
-        root.refreshInterval = Model.nextBackoff(root.refreshInterval)
-      }
+      if (code === 0) return
+      if (root.priceSource === "gecko" && root.refreshBinance()) return
+      root.statusText = "Price fetch failed"
+      root.refreshInterval = Model.nextBackoff(root.refreshInterval)
     }
   }
 
@@ -330,10 +334,21 @@ Item {
 
   Timer {
     interval: root.refreshInterval
-    running: root.settingsReady && !root.paused
+    running: root.settingsReady
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    interval: 2000
+    running: !root.settingsReady
+    repeat: false
+    onTriggered: {
+      if (root.settingsReady) return
+      root.settingsReady = true
+      root.refresh()
+    }
   }
 
   Timer {

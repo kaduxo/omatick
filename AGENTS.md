@@ -8,7 +8,7 @@ This is a community plugin. It is not part of Omarchy and is not affiliated with
 
 - Host is Omarchy (Hyprland + `omarchy-shell`).
 - `curl` is on PATH (stock Omarchy).
-- No credentials are required. Do not ask for exchange or market-data accounts.
+- No credentials are required. Do not ask for CoinGecko, Binance, or CoinPaprika accounts.
 
 ## Install
 

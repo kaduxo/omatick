@@ -18,7 +18,7 @@ var TEMPLATES = [
 
 function defaultTokens() {
   return [
-    { id: "btc-bitcoin", symbol: "BTC", name: "Bitcoin" }
+    { id: "bitcoin", symbol: "BTC", name: "Bitcoin" }
   ]
 }
 
@@ -27,7 +27,7 @@ function isSafeId(value) {
 }
 
 function isSafeSymbol(value) {
-  return /^[A-Z0-9]{1,12}$/.test(String(value || ""))
+  return /^[A-Z0-9][A-Z0-9-]{0,19}$/.test(String(value || ""))
 }
 
 function normalizeToken(raw) {
@@ -51,6 +51,22 @@ function normalizeTokens(raw) {
     out.push(token)
   }
   return out
+}
+
+function geckoIdCandidates(token) {
+  var ids = []
+  function add(value) {
+    var id = String(value || "").trim().toLowerCase()
+    if (!isSafeId(id) || ids.indexOf(id) >= 0) return
+    ids.push(id)
+  }
+  if (!token) return ids
+  add(token.id)
+  add(String(token.symbol || "").toLowerCase())
+  var prefix = String(token.symbol || "").toLowerCase() + "-"
+  var id = String(token.id || "")
+  if (prefix.length > 1 && id.indexOf(prefix) === 0) add(id.slice(prefix.length))
+  return ids
 }
 
 function templateIds() {
@@ -142,7 +158,9 @@ function changeValue(token, quotes) {
 function parseSearch(raw) {
   try {
     var parsed = JSON.parse(String(raw || ""))
-    var coins = parsed && Array.isArray(parsed.currencies) ? parsed.currencies : []
+    var coins = []
+    if (parsed && Array.isArray(parsed.coins)) coins = parsed.coins
+    else if (parsed && Array.isArray(parsed.currencies)) coins = parsed.currencies
     var out = []
     var seen = {}
     for (var i = 0; i < coins.length && out.length < 12; i++) {
@@ -154,6 +172,29 @@ function parseSearch(raw) {
     return out
   } catch (e) {
     return []
+  }
+}
+
+function parseGeckoPrices(raw, tokens) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    if (!parsed || typeof parsed !== "object" || parsed.error || parsed.status) return null
+    var list = normalizeTokens(tokens)
+    var out = {}
+    for (var i = 0; i < list.length; i++) {
+      var cands = geckoIdCandidates(list[i])
+      for (var j = 0; j < cands.length; j++) {
+        var row = parsed[cands[j]]
+        if (!row || typeof row !== "object") continue
+        var price = Number(row.usd)
+        if (!isFinite(price)) continue
+        out[list[i].id] = { usd: price, usd_24h_change: Number(row.usd_24h_change) }
+        break
+      }
+    }
+    return out
+  } catch (e) {
+    return null
   }
 }
 
@@ -172,7 +213,7 @@ function parseBinance(raw, tokens) {
     var list = normalizeTokens(tokens)
     var out = {}
     for (var j = 0; j < list.length; j++) {
-      var quote = byPair[list[j].symbol + "USDT"]
+      var quote = byPair[binancePair(list[j].symbol)]
       if (quote) out[list[j].id] = quote
     }
     return out
@@ -234,7 +275,34 @@ function parseSettings(raw) {
 function searchUrl(query) {
   var q = String(query || "").trim()
   if (q.length < 1) return ""
-  return "https://api.coinpaprika.com/v1/search/?q=" + encodeURIComponent(q) + "&c=currencies&limit=12"
+  return "https://api.coingecko.com/api/v3/search?query=" + encodeURIComponent(q)
+}
+
+function geckoPriceUrl(tokens) {
+  var list = normalizeTokens(tokens)
+  var ids = []
+  var seen = {}
+  for (var i = 0; i < list.length; i++) {
+    var cands = geckoIdCandidates(list[i])
+    for (var j = 0; j < cands.length; j++) {
+      if (seen[cands[j]]) continue
+      seen[cands[j]] = true
+      ids.push(cands[j])
+    }
+  }
+  if (ids.length === 0) return ""
+  return "https://api.coingecko.com/api/v3/simple/price?ids=" + ids.join(",") + "&vs_currencies=usd&include_24hr_change=true"
+}
+
+function binancePair(symbol) {
+  var match = String(symbol || "").toUpperCase().match(/^[A-Z0-9]{2,12}/)
+  return match ? match[0] + "USDT" : ""
+}
+
+function compactJsonStrings(values) {
+  var parts = []
+  for (var i = 0; i < values.length; i++) parts.push('"' + values[i] + '"')
+  return "[" + parts.join(",") + "]"
 }
 
 function binanceUrl(tokens) {
@@ -242,13 +310,13 @@ function binanceUrl(tokens) {
   var pairs = []
   var seen = {}
   for (var i = 0; i < list.length; i++) {
-    var pair = list[i].symbol + "USDT"
-    if (seen[pair]) continue
+    var pair = binancePair(list[i].symbol)
+    if (!pair || seen[pair]) continue
     seen[pair] = true
     pairs.push(pair)
   }
   if (pairs.length === 0) return ""
-  return "https://api.binance.com/api/v3/ticker/24hr?symbols=" + encodeURIComponent(JSON.stringify(pairs))
+  return "https://api.binance.com/api/v3/ticker/24hr?symbols=" + encodeURIComponent(compactJsonStrings(pairs))
 }
 
 function paprikaTickerUrl(id) {
