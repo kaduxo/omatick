@@ -1,12 +1,13 @@
 .pragma library
 
 var PLUGIN_ID = "kaduxo.omatick"
-var USER_AGENT = "omatick/1.0"
+var USER_AGENT = "omatick/1.2"
 var LAYER_NAMESPACE = "kaduxo-omatick"
 var MAX_TOKENS = 10
 var REFRESH_MS = 60000
 var REFRESH_MAX_MS = 900000
 var PAPRIKA_GAP_MS = 300000
+var MARKETS_PER_PAGE = 25
 
 var TEMPLATES = [
   { value: "symbol-price-change", label: "BTC $97k +1.2%" },
@@ -276,6 +277,79 @@ function searchUrl(query) {
   var q = String(query || "").trim()
   if (q.length < 1) return ""
   return "https://api.coingecko.com/api/v3/search?query=" + encodeURIComponent(q)
+}
+
+function marketsUrl(page) {
+  var n = Number(page)
+  if (!isFinite(n) || n < 1) n = 1
+  return "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page="
+    + MARKETS_PER_PAGE + "&page=" + Math.floor(n) + "&sparkline=true&price_change_percentage=24h"
+}
+
+function chartUrl(id, days) {
+  if (!isSafeId(id)) return ""
+  var d = String(days || "7")
+  if (d !== "1" && d !== "7" && d !== "30") d = "7"
+  return "https://api.coingecko.com/api/v3/coins/" + id + "/market_chart?vs_currency=usd&days=" + d
+}
+
+function parseSparkline(raw) {
+  var src = Array.isArray(raw) ? raw : []
+  var out = []
+  for (var i = 0; i < src.length; i++) {
+    var v = Number(src[i])
+    if (isFinite(v)) out.push(v)
+  }
+  return out
+}
+
+function parseMarkets(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    var rows = Array.isArray(parsed) ? parsed : []
+    var out = []
+    for (var i = 0; i < rows.length; i++) {
+      var token = normalizeToken(rows[i])
+      if (!token) continue
+      var spark = rows[i] && rows[i].sparkline_in_7d ? parseSparkline(rows[i].sparkline_in_7d.price) : []
+      var price = Number(rows[i].current_price)
+      var change = Number(rows[i].price_change_percentage_24h)
+      out.push({
+        id: token.id,
+        symbol: token.symbol,
+        name: token.name,
+        usd: isFinite(price) ? price : NaN,
+        usd_24h_change: isFinite(change) ? change : NaN,
+        sparkline: spark
+      })
+    }
+    return out
+  } catch (e) {
+    return null
+  }
+}
+
+function parseChart(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    var rows = parsed && Array.isArray(parsed.prices) ? parsed.prices : []
+    var out = []
+    for (var i = 0; i < rows.length; i++) {
+      var point = rows[i]
+      var v = Array.isArray(point) ? Number(point[1]) : Number(point)
+      if (isFinite(v)) out.push(v)
+    }
+    return out.length >= 2 ? out : null
+  } catch (e) {
+    return null
+  }
+}
+
+function marketChangeColor(change, upColor, downColor, fallback) {
+  var v = Number(change)
+  if (isFinite(v) && v < 0) return downColor
+  if (isFinite(v) && v > 0) return upColor
+  return fallback
 }
 
 function geckoPriceUrl(tokens) {

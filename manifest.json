@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "kaduxo.omatick",
   "name": "Omatick Crypto",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "author": "kaduxo",
   "license": "MIT",
   "homepage": "https://github.com/kaduxo/omatick",
-  "description": "Unofficial Omarchy bottom crypto ticker. CoinGecko prices, Binance and CoinPaprika fallback, up to ten coins.",
+  "description": "Unofficial Omarchy bottom crypto ticker with CoinGecko markets and charts.",
   "preview": "preview.png",
   "kinds": [
     "panel"

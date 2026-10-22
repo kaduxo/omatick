@@ -58,6 +58,8 @@ Item {
   }
 
   function open(arg) {
+    if (panelLoader.item && typeof panelLoader.item.applyPayload === "function")
+      panelLoader.item.applyPayload(arg)
     openFrom(root.panelAnchor, -1)
   }
 

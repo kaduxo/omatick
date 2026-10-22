@@ -53,6 +53,7 @@ Tell the user:
 - right-click: cycle template
 - middle-click: refresh
 - drag ⠿ in the picker: reorder
+- Markets tab: paged CoinGecko list with charts; Add puts a coin on the strip
 
 Confirm with `omarchy plugin list`. The id `kaduxo.omatick` should be enabled.
 
@@ -69,6 +70,16 @@ omarchy plugin remove kaduxo.omatick --yes
 ```
 
 `omarchy plugin remove` does not edit Hyprland. Remove the `kaduxo-omatick` layer rule from `~/.config/hypr/hyprland.lua` if you added it. Delete `~/.config/omarchy/kaduxo.omatick.json` only if the user wants the watchlist gone.
+
+## Change workflow
+
+After editing this plugin, test on the user's machine before pushing:
+
+1. Copy `Model.js`, `Panel.qml`, `TickerBar.qml`, and `Sparkline.qml` into `~/.config/omarchy/plugins/kaduxo.omatick/`
+2. `omarchy plugin validate ~/.config/omarchy/plugins/kaduxo.omatick`
+3. `omarchy restart shell`
+4. Confirm the strip still shows prices, then open the picker and the Markets tab
+5. Only then commit and `git push`, then `omarchy plugin update kaduxo.omatick --yes`
 
 ## Do not
 

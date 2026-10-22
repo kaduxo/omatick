@@ -54,8 +54,12 @@ If you are a coding agent installing this for a user, follow [`AGENTS.md`](AGENT
 | Right-click | Cycle display template |
 | Middle-click | Refresh prices |
 | Drag ⠿ in the picker | Reorder coins |
+| Watchlist / Markets | Switch picker tabs |
+| Markets row | Chart (1D / 7D / 30D) and Add |
 
 Default display is `symbol-price-change` (`BTC $97,432 +1.2%`). Other templates: `symbol-price`, `compact`, `name-price`, `change`. Gains are green, losses are red. Long watchlists scroll horizontally on one row.
+
+The Markets tab loads CoinGecko's top coins by market cap, 25 per page, with a themed sparkline and a larger chart for the selected coin. It does not download every CoinGecko listing at once.
 
 Watchlist is stored only in `~/.config/omarchy/kaduxo.omatick.json`, outside the git checkout, so `omarchy plugin update` stays clean. See [`settings.example.json`](settings.example.json). Prices are USD.
 

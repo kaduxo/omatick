@@ -23,12 +23,25 @@ Panel {
   property bool searchRestart: false
   property int draggingIndex: -1
   property int dropIndex: -1
+  property string viewMode: "watch"
+  property var markets: []
+  property int marketsPage: 0
+  property string marketsStatus: ""
+  property bool marketsLoading: false
+  property var selectedMarket: null
+  property var chartPoints: []
+  property string chartDays: "7"
+  property string chartStatus: ""
 
   readonly property var tokens: hostWidget && hostWidget.tokens ? hostWidget.tokens : []
   readonly property var quotes: hostWidget && hostWidget.quotes ? hostWidget.quotes : ({})
   readonly property string template: hostWidget && hostWidget.template ? hostWidget.template : "symbol-price-change"
   readonly property int replaceIndex: hostWidget && "replaceIndex" in hostWidget ? hostWidget.replaceIndex : -1
   readonly property color upColor: hostWidget && hostWidget.upColor ? hostWidget.upColor : "#7d9a78"
+  readonly property color chartColor: {
+    if (!selectedMarket) return Color.accent
+    return Model.marketChangeColor(selectedMarket.usd_24h_change, upColor, Color.urgent, Color.accent)
+  }
 
   function open() {
     root.controller.show()
@@ -40,6 +53,16 @@ Panel {
     Qt.callLater(root.focusSearch)
   }
 
+  function applyPayload(raw) {
+    try {
+      var parsed = typeof raw === "string" && raw !== "" ? JSON.parse(raw) : raw
+      if (parsed && parsed.view === "markets") {
+        root.viewMode = "markets"
+        root.ensureMarkets()
+      }
+    } catch (e) {}
+  }
+
   function close() {
     root.controller.hide()
     root.clearSearch()
@@ -48,7 +71,7 @@ Panel {
   }
 
   function focusSearch() {
-    if (!root.opened || !searchField) return
+    if (!root.opened || root.viewMode !== "watch" || !searchField) return
     searchField.forceActiveFocus()
   }
 
@@ -64,6 +87,64 @@ Panel {
   function toggle() {
     if (root.opened) root.close()
     else root.openFromHotkey()
+  }
+
+  function setViewMode(value) {
+    root.viewMode = value === "markets" ? "markets" : "watch"
+    if (root.viewMode === "markets") root.ensureMarkets()
+    else Qt.callLater(root.focusSearch)
+  }
+
+  function ensureMarkets() {
+    if (root.markets.length > 0 || marketsProc.running) return
+    root.marketsPage = 0
+    loadMarketsPage(1)
+  }
+
+  function loadMarketsPage(page) {
+    var url = Model.marketsUrl(page)
+    if (url === "") return
+    root.marketsLoading = true
+    root.marketsStatus = root.markets.length === 0 ? "Loading markets…" : "Loading more…"
+    root.marketsPage = page
+    marketsProc.command = Model.curlCommand(url)
+    marketsProc.running = true
+  }
+
+  function loadMoreMarkets() {
+    if (marketsProc.running) return
+    loadMarketsPage(root.marketsPage + 1)
+  }
+
+  function selectMarket(row) {
+    root.selectedMarket = row
+    root.chartDays = "7"
+    root.showSparkline()
+  }
+
+  function showSparkline() {
+    var spark = root.selectedMarket && root.selectedMarket.sparkline ? root.selectedMarket.sparkline : []
+    root.chartPoints = spark
+    root.chartStatus = spark.length > 1 ? "" : "Chart unavailable"
+  }
+
+  function setChartRange(days) {
+    if (!root.selectedMarket) return
+    root.chartDays = days
+    if (days === "7") {
+      root.showSparkline()
+      return
+    }
+    root.loadChart(root.selectedMarket.id, days)
+  }
+
+  function loadChart(id, days) {
+    var url = Model.chartUrl(id, days)
+    if (url === "") return
+    root.chartDays = days
+    root.chartStatus = root.chartPoints.length > 1 ? "" : "Loading chart…"
+    chartProc.command = Model.curlCommand(url)
+    chartProc.running = true
   }
 
   function requestSearch() {
@@ -152,6 +233,48 @@ Panel {
     }
   }
 
+  Process {
+    id: marketsProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.parseMarkets(text)
+        if (!parsed) {
+          root.marketsStatus = "Markets failed"
+          return
+        }
+        root.markets = root.marketsPage <= 1 ? parsed : root.markets.concat(parsed)
+        root.marketsStatus = parsed.length === 0 ? "No more markets" : ""
+        if (!root.selectedMarket && parsed.length > 0) root.selectMarket(parsed[0])
+      }
+    }
+    onExited: function(code) {
+      root.marketsLoading = false
+      if (code !== 0) root.marketsStatus = "Markets failed"
+    }
+  }
+
+  Process {
+    id: chartProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.parseChart(text)
+        if (parsed) {
+          root.chartPoints = parsed
+          root.chartStatus = ""
+        } else if (root.chartPoints.length < 2) {
+          root.chartStatus = "Chart unavailable"
+        } else {
+          root.chartStatus = ""
+        }
+      }
+    }
+    onExited: function(code) {
+      if (code !== 0 && root.chartPoints.length < 2) root.chartStatus = "Chart unavailable"
+    }
+  }
+
   Timer {
     id: searchDebounce
     interval: 350
@@ -163,6 +286,11 @@ Panel {
     function open(): void { root.openFromHotkey() }
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
+    function browse(): void {
+      root.viewMode = "markets"
+      root.ensureMarkets()
+      root.openFromHotkey()
+    }
   }
 
   KeyboardPanel {
@@ -173,8 +301,8 @@ Panel {
     open: root.opened
     centerOnBar: true
     focusTarget: searchField
-    contentWidth: panel.fittedContentWidth ? panel.fittedContentWidth(Style.space(420)) : Style.space(420)
-    contentHeight: panel.fittedContentHeight ? panel.fittedContentHeight(body.implicitHeight) : Style.space(420)
+    contentWidth: panel.fittedContentWidth ? panel.fittedContentWidth(Style.space(460)) : Style.space(460)
+    contentHeight: panel.fittedContentHeight ? panel.fittedContentHeight(body.implicitHeight) : Style.space(460)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -182,7 +310,8 @@ Panel {
       blocked: searchField.activeFocus
       onCloseRequested: root.close()
       onReturnRequested: {
-        if (root.suggestions.length > 0) root.pickSuggestion(root.suggestions[Math.max(0, root.suggestionIndex)])
+        if (root.viewMode === "watch" && root.suggestions.length > 0)
+          root.pickSuggestion(root.suggestions[Math.max(0, root.suggestionIndex)])
       }
       onMoveRequested: function(dx, dy) {
         if (root.suggestions.length === 0) return
@@ -205,22 +334,36 @@ Panel {
           font.pixelSize: Style.font.heading
         }
 
+        ButtonGroup {
+          width: parent.width
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          accent: Color.accent
+          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          fontSize: Style.font.caption
+          value: root.viewMode
+          options: [
+            { value: "watch", label: "Watchlist" },
+            { value: "markets", label: "Markets" }
+          ]
+          onChanged: function(value) { root.setViewMode(value) }
+        }
+
         Text {
+          visible: root.viewMode === "watch"
           width: parent.width
           wrapMode: Text.WordWrap
           text: tokens.length >= Model.MAX_TOKENS
             ? "Ten coins on the strip. Drag the handle to reorder, or click a coin and pick a search result to replace it."
-            : "Search a coin to add it. Drag the handle to reorder. Up to ten on the bottom strip."
+            : "Search a coin to add it, or open Markets for CoinGecko charts. Up to ten on the strip."
           color: Color.muted
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
         }
 
         Repeater {
-          model: tokens
+          model: root.viewMode === "watch" ? tokens : []
 
           Rectangle {
-            id: tokenRow
             required property var modelData
             required property int index
             width: body.width
@@ -297,6 +440,7 @@ Panel {
 
         TextField {
           id: searchField
+          visible: root.viewMode === "watch"
           width: parent.width
           placeholderText: "Search bitcoin, solana, pepe…"
           foreground: root.bar ? root.bar.foreground : Color.foreground
@@ -320,7 +464,7 @@ Panel {
         }
 
         Text {
-          visible: root.searchStatus !== ""
+          visible: root.viewMode === "watch" && root.searchStatus !== ""
           width: parent.width
           text: root.searchStatus
           color: Color.muted
@@ -328,7 +472,7 @@ Panel {
         }
 
         Repeater {
-          model: suggestions
+          model: root.viewMode === "watch" ? suggestions : []
 
           Rectangle {
             required property var modelData
@@ -361,7 +505,175 @@ Panel {
           }
         }
 
+        Column {
+          visible: root.viewMode === "markets"
+          width: parent.width
+          spacing: Style.space(10)
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Top CoinGecko markets by cap, 25 per page. Click a row for a chart."
+            color: Color.muted
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            visible: root.marketsStatus !== ""
+            width: parent.width
+            text: root.marketsStatus
+            color: Color.muted
+            font.pixelSize: Style.font.caption
+          }
+
+          Sparkline {
+            width: parent.width
+            height: Style.space(88)
+            visible: root.chartPoints.length > 1
+            points: root.chartPoints
+            lineColor: root.chartColor
+          }
+
+          Row {
+            visible: root.selectedMarket !== null
+            width: parent.width
+            spacing: Style.space(10)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - Style.space(120)
+              elide: Text.ElideRight
+              text: root.selectedMarket
+                ? root.selectedMarket.symbol + "  " + root.selectedMarket.name + "  " + Model.formatPrice(root.selectedMarket.usd)
+                : ""
+              color: root.chartColor
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+            }
+
+            Button {
+              text: "Add"
+              bordered: true
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              accent: Color.accent
+              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+              fontSize: Style.font.caption
+              onClicked: if (root.selectedMarket) root.pickSuggestion(root.selectedMarket)
+            }
+          }
+
+          ButtonGroup {
+            visible: root.selectedMarket !== null
+            width: parent.width
+            foreground: root.bar ? root.bar.foreground : Color.foreground
+            accent: Color.accent
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            fontSize: Style.font.caption
+            value: root.chartDays
+            options: [
+              { value: "1", label: "1D" },
+              { value: "7", label: "7D" },
+              { value: "30", label: "30D" }
+            ]
+            onChanged: function(value) { root.setChartRange(value) }
+          }
+
+          Text {
+            visible: root.chartStatus !== ""
+            width: parent.width
+            text: root.chartStatus
+            color: Color.muted
+            font.pixelSize: Style.font.caption
+          }
+
+          Flickable {
+            width: parent.width
+            height: Style.space(40) * 7 + Style.space(4) * 6
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            contentWidth: width
+            contentHeight: marketList.implicitHeight
+            flickableDirection: Flickable.VerticalFlick
+
+            Column {
+              id: marketList
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: root.markets
+
+                Rectangle {
+                  required property var modelData
+                  required property int index
+                  width: marketList.width
+                  height: Style.space(40)
+                  radius: Style.cornerRadius
+                  color: root.selectedMarket && root.selectedMarket.id === modelData.id
+                    ? Color.menu.selectedBackground
+                    : "transparent"
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.selectMarket(modelData)
+                  }
+
+                  Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: Style.space(8)
+                    anchors.rightMargin: Style.space(8)
+                    spacing: Style.space(8)
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(70)
+                      elide: Text.ElideRight
+                      text: modelData.symbol
+                      color: root.bar ? root.bar.foreground : Color.foreground
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Sparkline {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(72)
+                      height: Style.space(22)
+                      points: modelData.sparkline
+                      lineColor: Model.marketChangeColor(modelData.usd_24h_change, root.upColor, Color.urgent, Color.accent)
+                    }
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: parent.width - Style.space(200)
+                      elide: Text.ElideRight
+                      text: Model.formatPrice(modelData.usd) + "  " + Model.formatChange(modelData.usd_24h_change)
+                      color: Model.marketChangeColor(modelData.usd_24h_change, root.upColor, Color.urgent, Color.muted)
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          Button {
+            text: root.marketsLoading ? "Loading…" : "More markets"
+            enabled: !root.marketsLoading
+            bordered: true
+            foreground: root.bar ? root.bar.foreground : Color.foreground
+            accent: Color.accent
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            fontSize: Style.font.caption
+            onClicked: root.loadMoreMarkets()
+          }
+        }
+
         Text {
+          visible: root.viewMode === "watch"
           width: parent.width
           text: "Display"
           color: Color.muted
@@ -369,6 +681,7 @@ Panel {
         }
 
         ButtonGroup {
+          visible: root.viewMode === "watch"
           width: parent.width
           foreground: root.bar ? root.bar.foreground : Color.foreground
           accent: Color.accent
